@@ -50,20 +50,27 @@ def home():
 
 @app.route('/process', methods=['POST'])
 def process_file():
-    uploaded_file = request.files.get('file')
-    apply_kids_fix = request.form.get('apply_kids_fix') == 'on'
+    try:
+        uploaded_file = request.files.get('file')
+        apply_kids_fix = request.form.get('apply_kids_fix') == 'on'
 
-    if uploaded_file and allowed_file(uploaded_file.filename):
+        if not uploaded_file or uploaded_file.filename == '':
+            return "❌ No file uploaded.", 400
+
+        if not allowed_file(uploaded_file.filename):
+            return "❌ Invalid file format. Only .xlsx, .xls, .csv allowed.", 400
+
         filepath = os.path.join(UPLOAD_FOLDER, uploaded_file.filename)
         uploaded_file.save(filepath)
 
         ext = uploaded_file.filename.rsplit('.', 1)[1].lower()
+
         if ext == 'csv':
             df = pd.read_csv(filepath, header=None)
         elif ext == 'xls':
             df = pd.read_excel(filepath, engine='xlrd', header=None)
         else:
-            df = pd.read_excel(filepath, header=None)  # for .xlsx
+            df = pd.read_excel(filepath, header=None)  # .xlsx default
 
         placement_id_col, tag_col = None, None
         for col in df.columns:
@@ -74,7 +81,7 @@ def process_file():
                 tag_col = col
 
         if placement_id_col is None or tag_col is None:
-            return "❌ Could not find 'Placement ID' or 'TAG' column."
+            return "❌ Could not find 'Placement ID' or 'TAG' column.", 400
 
         df = df.rename(columns={placement_id_col: 'PLACEMENT ID', tag_col: 'TAG'})
         df['PLACEMENT ID MAPPING'] = df['PLACEMENT ID']
@@ -83,49 +90,54 @@ def process_file():
 
         output_path = os.path.join(PROCESSED_FOLDER, "processed_" + uploaded_file.filename)
         df.to_excel(output_path, index=False)
+
         return send_file(output_path, as_attachment=True)
 
-    return "❌ Invalid file format."
+    except Exception as e:
+        return f"❌ Internal Server Error: {str(e)}", 500
 
 def clean_tag(tag, apply_kids_fix):
     notes = []
 
+    # Remove <img ... src="..."> wrappers
     if '<img' in tag.lower():
         match = re.search(r'src\s*=\s*"(.*?)"', tag, re.IGNORECASE)
         if match:
             tag = match.group(1)
             notes.append("HTML img wrapper removed")
 
+    # Decode percent-encoded URLs inside _vast param
     if '_vast=' in tag:
         tag = urllib.parse.unquote(tag)
 
-    replacements = {
-        r'\[timestamp\]|\[ord\]|\[correlator\]|\[cachebuster\]': '%%CACHEBUSTER%%',
-        r'\[random\]': '%%RANDOM%%',
-        r'\[campaignid\]': '%%CAMPAIGN_ID%%',
-        r'\[device\]': '%%DEVICE%%',
-        r'\[placement\]': '%%PLACEMENT%%',
-        r'\[user_id\]': '%%USER_ID%%',
-        r'\[gdid\]': '%%GDID%%',
-        r'\[adid\]': '%%AD_ID%%',
-        r'\{INSERT_CACHEBUSTER_HERE\}|INSERT CACHEBUSTER|%REPLACE-TIMESTAMP-MACRO%': '%%CACHEBUSTER%%',
-    }
+    # Replace standard macros
+    tag = re.sub(r'\[timestamp\]|\[ord\]|\[correlator\]|\[cachebuster\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
+    tag = re.sub(r'\[random\]', '%%RANDOM%%', tag, flags=re.IGNORECASE)
+    tag = re.sub(r'\[campaignid\]', '%%CAMPAIGN_ID%%', tag, flags=re.IGNORECASE)
+    tag = re.sub(r'\[device\]', '%%DEVICE%%', tag, flags=re.IGNORECASE)
+    tag = re.sub(r'\[placement\]', '%%PLACEMENT%%', tag, flags=re.IGNORECASE)
+    tag = re.sub(r'\[user_id\]', '%%USER_ID%%', tag, flags=re.IGNORECASE)
+    tag = re.sub(r'\[gdid\]', '%%GDID%%', tag, flags=re.IGNORECASE)
+    tag = re.sub(r'\[adid\]', '%%AD_ID%%', tag, flags=re.IGNORECASE)
+    tag = re.sub(r'\{INSERT_CACHEBUSTER_HERE\}|INSERT CACHEBUSTER|%REPLACE-TIMESTAMP-MACRO%', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
 
-    for pattern, repl in replacements.items():
-        tag = re.sub(pattern, repl, tag, flags=re.IGNORECASE)
-
+    # Nielsen tag logic
     if 'imrworldwide.com' in tag:
         tag = tag.strip('"')
+        tag = re.sub(r'\[timestamp\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         notes.append("Nielsen tag cleaned")
 
+    # Flashtalking
     if 'servedby.flashtalking.com' in tag:
         tag = re.sub(r'\[CACHEBUSTER\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         notes.append("Flashtalking macros updated")
 
+    # DCM kids compliance
     if apply_kids_fix and ('doubleclick.net' in tag.lower() or 'dcm.net' in tag.lower()):
         tag = re.sub(r'tag_for_child_directed_treatment=[^;?&]*', 'tag_for_child_directed_treatment=1', tag, flags=re.IGNORECASE)
         tag = re.sub(r'tfua=[^;?&]*', 'tfua=1', tag, flags=re.IGNORECASE)
 
+    # Extreme Reach
     if 'extremereach.io' in tag:
         tag = re.sub(r'\[timestamp\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         notes.append("Extreme Reach macros updated")
