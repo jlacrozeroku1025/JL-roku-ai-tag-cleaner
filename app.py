@@ -50,25 +50,20 @@ def home():
 
 @app.route('/process', methods=['POST'])
 def process_file():
-    try:
-        uploaded_file = request.files.get('file')
-        apply_kids_fix = request.form.get('apply_kids_fix') == 'on'
+    uploaded_file = request.files.get('file')
+    apply_kids_fix = request.form.get('apply_kids_fix') == 'on'
 
-        if not uploaded_file or uploaded_file.filename == '':
-            return "❌ No file uploaded.", 400
-
-        if not allowed_file(uploaded_file.filename):
-            return "❌ Invalid file format. Only .xlsx, .xls, .csv allowed.", 400
-
+    if uploaded_file and allowed_file(uploaded_file.filename):
         filepath = os.path.join(UPLOAD_FOLDER, uploaded_file.filename)
         uploaded_file.save(filepath)
 
         ext = uploaded_file.filename.rsplit('.', 1)[1].lower()
-
         if ext == 'csv':
             df = pd.read_csv(filepath, header=None)
+        elif ext == 'xls':
+            df = pd.read_excel(filepath, engine='xlrd', header=None)
         else:
-            df = pd.read_excel(filepath, engine='xlrd' if ext == 'xls' else None, header=None)
+            df = pd.read_excel(filepath, header=None)  # for .xlsx
 
         placement_id_col, tag_col = None, None
         for col in df.columns:
@@ -79,7 +74,7 @@ def process_file():
                 tag_col = col
 
         if placement_id_col is None or tag_col is None:
-            return "❌ Could not find 'Placement ID' or 'TAG' column.", 400
+            return "❌ Could not find 'Placement ID' or 'TAG' column."
 
         df = df.rename(columns={placement_id_col: 'PLACEMENT ID', tag_col: 'TAG'})
         df['PLACEMENT ID MAPPING'] = df['PLACEMENT ID']
@@ -90,8 +85,7 @@ def process_file():
         df.to_excel(output_path, index=False)
         return send_file(output_path, as_attachment=True)
 
-    except Exception as e:
-        return f"❌ Internal Server Error: {str(e)}", 500
+    return "❌ Invalid file format."
 
 def clean_tag(tag, apply_kids_fix):
     notes = []
@@ -140,4 +134,3 @@ def clean_tag(tag, apply_kids_fix):
 
 if __name__ == '__main__':
     app.run(debug=True)
-
