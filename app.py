@@ -65,20 +65,30 @@ def process_file():
 
         ext = uploaded_file.filename.rsplit('.', 1)[1].lower()
 
+        # Default to reading with header=0
         if ext == 'csv':
-            df = pd.read_csv(filepath, header=None)
-        elif ext == 'xls':
-            df = pd.read_excel(filepath, engine='xlrd', header=None)
+            df = pd.read_csv(filepath, header=0)
         else:
-            df = pd.read_excel(filepath, header=None)  # .xlsx default
+            df = pd.read_excel(filepath, header=0)
 
-        placement_id_col, tag_col = None, None
+        # Try matching columns by name (case-insensitive)
+        placement_id_col = None
+        tag_col = None
         for col in df.columns:
-            sample_values = df[col].astype(str).head(20).str.lower()
-            if placement_id_col is None and sample_values.str.match(r'^\\d{5,}$').any():
+            col_lower = str(col).strip().lower()
+            if 'placement' in col_lower and placement_id_col is None:
                 placement_id_col = col
-            if tag_col is None and sample_values.str.contains('http').any():
+            if 'tag' in col_lower and tag_col is None:
                 tag_col = col
+
+        # Fallback to content-based detection if needed
+        if placement_id_col is None or tag_col is None:
+            for col in df.columns:
+                sample_values = df[col].astype(str).head(20).str.lower()
+                if placement_id_col is None and sample_values.str.match(r'^\d{5,}$').any():
+                    placement_id_col = col
+                if tag_col is None and sample_values.str.contains('http').any():
+                    tag_col = col
 
         if placement_id_col is None or tag_col is None:
             return "❌ Could not find 'Placement ID' or 'TAG' column.", 400
@@ -99,18 +109,15 @@ def process_file():
 def clean_tag(tag, apply_kids_fix):
     notes = []
 
-    # Remove <img src="..."> wrappers
     if '<img' in tag.lower():
         match = re.search(r'src\s*=\s*"(.*?)"', tag, re.IGNORECASE)
         if match:
             tag = match.group(1)
             notes.append("HTML img wrapper removed")
 
-    # Decode encoded URLs if inside _vast=
     if '_vast=' in tag:
         tag = urllib.parse.unquote(tag)
 
-    # Macro replacements
     tag = re.sub(r'\[timestamp\]|\[ord\]|\[correlator\]|\[cachebuster\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
     tag = re.sub(r'\[random\]', '%%RANDOM%%', tag, flags=re.IGNORECASE)
     tag = re.sub(r'\[campaignid\]', '%%CAMPAIGN_ID%%', tag, flags=re.IGNORECASE)
@@ -121,28 +128,23 @@ def clean_tag(tag, apply_kids_fix):
     tag = re.sub(r'\[adid\]', '%%AD_ID%%', tag, flags=re.IGNORECASE)
     tag = re.sub(r'\{INSERT_CACHEBUSTER_HERE\}|INSERT CACHEBUSTER|%REPLACE-TIMESTAMP-MACRO%', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
 
-    # Nielsen
     if 'imrworldwide.com' in tag:
         tag = tag.strip('"')
         tag = re.sub(r'\[timestamp\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         notes.append("Nielsen tag cleaned")
 
-    # Flashtalking
     if 'servedby.flashtalking.com' in tag:
         tag = re.sub(r'\[CACHEBUSTER\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         notes.append("Flashtalking macros updated")
 
-    # DCM kids fix
     if apply_kids_fix and ('doubleclick.net' in tag.lower() or 'dcm.net' in tag.lower()):
         tag = re.sub(r'tag_for_child_directed_treatment=[^;?&]*', 'tag_for_child_directed_treatment=1', tag, flags=re.IGNORECASE)
         tag = re.sub(r'tfua=[^;?&]*', 'tfua=1', tag, flags=re.IGNORECASE)
 
-    # Extreme Reach
     if 'extremereach.io' in tag:
         tag = re.sub(r'\[timestamp\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         notes.append("Extreme Reach macros updated")
 
-    # Sizmek / MediaMind
     if 'serving-sys.com' in tag or 'mediamind.com' in tag or 'sizmek.com' in tag:
         tag = re.sub(r'\[timestamp\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         if '^' in tag:
