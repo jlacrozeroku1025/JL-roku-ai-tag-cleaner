@@ -18,7 +18,7 @@ def allowed_file(filename):
 
 @app.route('/')
 def home():
-    return '''
+    return """
     <!DOCTYPE html>
     <html>
     <head>
@@ -27,26 +27,26 @@ def home():
     body { font-family: Arial, sans-serif; background: #f4f4f4; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
     .container { background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center; width: 420px; }
     h2 { margin-top: 0; }
-    input[type="file"] { margin: 20px 0; }
-    input[type="submit"] { background-color: #0055ff; color: white; padding: 10px 20px; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; }
-    input[type="submit"]:hover { background-color: #0041c4; }
+    input[type='file'] { margin: 20px 0; }
+    input[type='submit'] { background-color: #0055ff; color: white; padding: 10px 20px; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; }
+    input[type='submit']:hover { background-color: #0041c4; }
     label { font-size: 14px; }
     </style>
     </head>
     <body>
     <div class="container">
         <h2>👻 Roku Tag Cleaner</h2>
-        <form method="POST" action="/process" enctype="multipart/form-data">
-            <input type="file" name="file" required><br>
+        <form method='POST' action='/process' enctype='multipart/form-data'>
+            <input type='file' name='file' required><br>
             <label>
-                <input type="checkbox" name="apply_kids_fix"> Apply Kids Compliance (DCM only)
+                <input type='checkbox' name='apply_kids_fix'> Apply Kids Compliance (DCM only)
             </label><br><br>
-            <input type="submit" value="Upload & Clean Tags">
+            <input type='submit' value='Upload & Clean Tags'>
         </form>
     </div>
     </body>
     </html>
-    '''
+    """
 
 @app.route('/process', methods=['POST'])
 def process_file():
@@ -75,7 +75,7 @@ def process_file():
         placement_id_col, tag_col = None, None
         for col in df.columns:
             sample_values = df[col].astype(str).head(20).str.lower()
-            if placement_id_col is None and sample_values.str.match(r'^\d{5,}$').any():
+            if placement_id_col is None and sample_values.str.match(r'^\\d{5,}$').any():
                 placement_id_col = col
             if tag_col is None and sample_values.str.contains('http').any():
                 tag_col = col
@@ -99,18 +99,18 @@ def process_file():
 def clean_tag(tag, apply_kids_fix):
     notes = []
 
-    # Remove <img ... src="..."> wrappers
+    # Remove <img src="..."> wrappers
     if '<img' in tag.lower():
         match = re.search(r'src\s*=\s*"(.*?)"', tag, re.IGNORECASE)
         if match:
             tag = match.group(1)
             notes.append("HTML img wrapper removed")
 
-    # Decode percent-encoded URLs inside _vast param
+    # Decode encoded URLs if inside _vast=
     if '_vast=' in tag:
         tag = urllib.parse.unquote(tag)
 
-    # Replace standard macros
+    # Macro replacements
     tag = re.sub(r'\[timestamp\]|\[ord\]|\[correlator\]|\[cachebuster\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
     tag = re.sub(r'\[random\]', '%%RANDOM%%', tag, flags=re.IGNORECASE)
     tag = re.sub(r'\[campaignid\]', '%%CAMPAIGN_ID%%', tag, flags=re.IGNORECASE)
@@ -121,7 +121,7 @@ def clean_tag(tag, apply_kids_fix):
     tag = re.sub(r'\[adid\]', '%%AD_ID%%', tag, flags=re.IGNORECASE)
     tag = re.sub(r'\{INSERT_CACHEBUSTER_HERE\}|INSERT CACHEBUSTER|%REPLACE-TIMESTAMP-MACRO%', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
 
-    # Nielsen tag logic
+    # Nielsen
     if 'imrworldwide.com' in tag:
         tag = tag.strip('"')
         tag = re.sub(r'\[timestamp\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
@@ -132,7 +132,7 @@ def clean_tag(tag, apply_kids_fix):
         tag = re.sub(r'\[CACHEBUSTER\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         notes.append("Flashtalking macros updated")
 
-    # DCM kids compliance
+    # DCM kids fix
     if apply_kids_fix and ('doubleclick.net' in tag.lower() or 'dcm.net' in tag.lower()):
         tag = re.sub(r'tag_for_child_directed_treatment=[^;?&]*', 'tag_for_child_directed_treatment=1', tag, flags=re.IGNORECASE)
         tag = re.sub(r'tfua=[^;?&]*', 'tfua=1', tag, flags=re.IGNORECASE)
@@ -141,6 +141,14 @@ def clean_tag(tag, apply_kids_fix):
     if 'extremereach.io' in tag:
         tag = re.sub(r'\[timestamp\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         notes.append("Extreme Reach macros updated")
+
+    # Sizmek / MediaMind
+    if 'serving-sys.com' in tag or 'mediamind.com' in tag or 'sizmek.com' in tag:
+        tag = re.sub(r'\[timestamp\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
+        if '^' in tag:
+            tag = tag.replace('^', '%5E')
+            notes.append("Replaced ^ with %5E for Sizmek compliance")
+        notes.append("Sizmek tag cleaned")
 
     return tag, "; ".join(set(notes)) or "Macros updated"
 
