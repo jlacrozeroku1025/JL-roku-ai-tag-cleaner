@@ -71,27 +71,14 @@ def process_file():
             df = pd.read_excel(filepath, header=0)
 
         # Flexible column matching
-        placement_id_col, tag_col = None, None
-        for col in df.columns:
-            col_lower = str(col).strip().lower()
-            if 'placement' in col_lower and placement_id_col is None:
-                placement_id_col = col
-            if 'tag' in col_lower and tag_col is None:
-                tag_col = col
+        col_map = {col.lower().strip(): col for col in df.columns}
+        placement_col = next((col_map[c] for c in col_map if 'placement' in c and 'id' in c), None)
+        tag_col = next((col_map[c] for c in col_map if 'tag' in c), None)
 
-        # Fallback to content detection
-        if placement_id_col is None or tag_col is None:
-            for col in df.columns:
-                sample_values = df[col].astype(str).head(20).str.lower()
-                if placement_id_col is None and sample_values.str.match(r'^\d{5,}$').any():
-                    placement_id_col = col
-                if tag_col is None and sample_values.str.contains('http').any():
-                    tag_col = col
-
-        if placement_id_col is None or tag_col is None:
+        if not placement_col or not tag_col:
             return "❌ Could not find 'Placement ID' or 'TAG' column.", 400
 
-        df = df.rename(columns={placement_id_col: 'PLACEMENT ID', tag_col: 'TAG'})
+        df = df.rename(columns={placement_col: 'PLACEMENT ID', tag_col: 'TAG'})
         df['PLACEMENT ID MAPPING'] = df['PLACEMENT ID']
         df['TAG (👻 BUSTED)'] = df['TAG'].apply(lambda x: clean_tag(str(x), apply_kids_fix)[0])
         df['Tag Notes'] = df['TAG'].apply(lambda x: clean_tag(str(x), apply_kids_fix)[1])
@@ -107,18 +94,18 @@ def process_file():
 def clean_tag(tag, apply_kids_fix):
     notes = []
 
-    # Remove HTML <img> wrappers
+    # Remove <img src="...">
     if '<img' in tag.lower():
         match = re.search(r'src\s*=\s*"(.*?)"', tag, re.IGNORECASE)
         if match:
             tag = match.group(1)
             notes.append("HTML img wrapper removed")
 
-    # Decode VAST URLs
+    # Unquote VAST param
     if '_vast=' in tag:
         tag = urllib.parse.unquote(tag)
 
-    # Macro cleanup
+    # Replace macros (including variations)
     tag = re.sub(r'\[timestamp\]|\[ord\]|\[correlator\]|\[cachebuster\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
     tag = re.sub(r'\[random\]', '%%RANDOM%%', tag, flags=re.IGNORECASE)
     tag = re.sub(r'\[campaignid\]', '%%CAMPAIGN_ID%%', tag, flags=re.IGNORECASE)
@@ -128,9 +115,9 @@ def clean_tag(tag, apply_kids_fix):
     tag = re.sub(r'\[gdid\]', '%%GDID%%', tag, flags=re.IGNORECASE)
     tag = re.sub(r'\[adid\]', '%%AD_ID%%', tag, flags=re.IGNORECASE)
 
-    # Flexible match for cachebuster/breaker placeholders
+    # Fix various broken cachebuster macros (buster/breaker)
     tag = re.sub(
-        r'(\[|\{)INSERT_CACHEB[RU]S?TER_HERE(\]|\})|INSERT CACHEB[RU]S?TER|%REPLACE-TIMESTAMP-MACRO%',
+        r'(\[|\{)INSERT_CACHEB(USTER|REAKER)_HERE(\]|\})|INSERT CACHEB(USTER|REAKER)|%REPLACE-TIMESTAMP-MACRO%',
         '%%CACHEBUSTER%%',
         tag,
         flags=re.IGNORECASE
@@ -139,7 +126,6 @@ def clean_tag(tag, apply_kids_fix):
     # Nielsen
     if 'imrworldwide.com' in tag:
         tag = tag.strip('"')
-        tag = re.sub(r'\[timestamp\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         notes.append("Nielsen tag cleaned")
 
     # Flashtalking
@@ -147,10 +133,11 @@ def clean_tag(tag, apply_kids_fix):
         tag = re.sub(r'\[CACHEBUSTER\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         notes.append("Flashtalking macros updated")
 
-    # DCM Kids
+    # DCM kids fix
     if apply_kids_fix and ('doubleclick.net' in tag.lower() or 'dcm.net' in tag.lower()):
-        tag = re.sub(r'tag_for_child_directed_treatment=[^&]*', 'tag_for_child_directed_treatment=1', tag, flags=re.IGNORECASE)
-        tag = re.sub(r'tfua=[^&]*', 'tfua=1', tag, flags=re.IGNORECASE)
+        tag = re.sub(r'tag_for_child_directed_treatment=[^;&?]*', 'tag_for_child_directed_treatment=1', tag, flags=re.IGNORECASE)
+        tag = re.sub(r'tfua=[^;&?]*', 'tfua=1', tag, flags=re.IGNORECASE)
+        notes.append("Kids compliance applied")
 
     # Extreme Reach
     if 'extremereach.io' in tag:
