@@ -65,15 +65,13 @@ def process_file():
 
         ext = uploaded_file.filename.rsplit('.', 1)[1].lower()
 
-        # Default to reading with header=0
         if ext == 'csv':
             df = pd.read_csv(filepath, header=0)
         else:
             df = pd.read_excel(filepath, header=0)
 
-        # Try matching columns by name (case-insensitive)
-        placement_id_col = None
-        tag_col = None
+        # Flexible column matching
+        placement_id_col, tag_col = None, None
         for col in df.columns:
             col_lower = str(col).strip().lower()
             if 'placement' in col_lower and placement_id_col is None:
@@ -81,7 +79,7 @@ def process_file():
             if 'tag' in col_lower and tag_col is None:
                 tag_col = col
 
-        # Fallback to content-based detection if needed
+        # Fallback to content detection
         if placement_id_col is None or tag_col is None:
             for col in df.columns:
                 sample_values = df[col].astype(str).head(20).str.lower()
@@ -109,15 +107,18 @@ def process_file():
 def clean_tag(tag, apply_kids_fix):
     notes = []
 
+    # Remove HTML <img> wrappers
     if '<img' in tag.lower():
         match = re.search(r'src\s*=\s*"(.*?)"', tag, re.IGNORECASE)
         if match:
             tag = match.group(1)
             notes.append("HTML img wrapper removed")
 
+    # Decode VAST URLs
     if '_vast=' in tag:
         tag = urllib.parse.unquote(tag)
 
+    # Macro cleanup
     tag = re.sub(r'\[timestamp\]|\[ord\]|\[correlator\]|\[cachebuster\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
     tag = re.sub(r'\[random\]', '%%RANDOM%%', tag, flags=re.IGNORECASE)
     tag = re.sub(r'\[campaignid\]', '%%CAMPAIGN_ID%%', tag, flags=re.IGNORECASE)
@@ -126,25 +127,36 @@ def clean_tag(tag, apply_kids_fix):
     tag = re.sub(r'\[user_id\]', '%%USER_ID%%', tag, flags=re.IGNORECASE)
     tag = re.sub(r'\[gdid\]', '%%GDID%%', tag, flags=re.IGNORECASE)
     tag = re.sub(r'\[adid\]', '%%AD_ID%%', tag, flags=re.IGNORECASE)
-    tag = re.sub(r'\{INSERT_CACHEBUSTER_HERE\}|INSERT CACHEBUSTER|%REPLACE-TIMESTAMP-MACRO%', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
 
+    # Flexible match for cachebuster/breaker placeholders
+    tag = re.sub(
+        r'(\[|\{)INSERT_CACHEB[RU]S?TER_HERE(\]|\})|INSERT CACHEB[RU]S?TER|%REPLACE-TIMESTAMP-MACRO%',
+        '%%CACHEBUSTER%%',
+        tag,
+        flags=re.IGNORECASE
+    )
+
+    # Nielsen
     if 'imrworldwide.com' in tag:
         tag = tag.strip('"')
         tag = re.sub(r'\[timestamp\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         notes.append("Nielsen tag cleaned")
 
+    # Flashtalking
     if 'servedby.flashtalking.com' in tag:
         tag = re.sub(r'\[CACHEBUSTER\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         notes.append("Flashtalking macros updated")
 
+    # DCM Kids
     if apply_kids_fix and ('doubleclick.net' in tag.lower() or 'dcm.net' in tag.lower()):
-        tag = re.sub(r'tag_for_child_directed_treatment=[^;?&]*', 'tag_for_child_directed_treatment=1', tag, flags=re.IGNORECASE)
-        tag = re.sub(r'tfua=[^;?&]*', 'tfua=1', tag, flags=re.IGNORECASE)
+        tag = re.sub(r'tag_for_child_directed_treatment=[^&]*', 'tag_for_child_directed_treatment=1', tag, flags=re.IGNORECASE)
+        tag = re.sub(r'tfua=[^&]*', 'tfua=1', tag, flags=re.IGNORECASE)
 
+    # Extreme Reach
     if 'extremereach.io' in tag:
-        tag = re.sub(r'\[timestamp\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         notes.append("Extreme Reach macros updated")
 
+    # Sizmek / MediaMind
     if 'serving-sys.com' in tag or 'mediamind.com' in tag or 'sizmek.com' in tag:
         tag = re.sub(r'\[timestamp\]', '%%CACHEBUSTER%%', tag, flags=re.IGNORECASE)
         if '^' in tag:
